@@ -157,6 +157,8 @@ systemctl start tproxy
 # 确保 dnsmasq 目录存在
 # ================================
 green "确保 dnsmasq 配置目录存在..."
+
+# 检查并创建目录
 mkdir -p /etc/dnsmasq.d
 
 # ================================
@@ -171,6 +173,7 @@ server=223.5.5.5
 cache-size=1000
 EOF
 
+# 安装 dnsmasq 并重启服务
 apt install -y dnsmasq
 systemctl enable dnsmasq
 systemctl restart dnsmasq
