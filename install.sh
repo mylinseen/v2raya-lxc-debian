@@ -1,206 +1,179 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# ====== 提示用户输入配置 ======
+echo "请提供以下配置选项："
 
-# 日志函数
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+# 询问外网接口（网卡名）
+read -p "请输入外网接口名称 (例如 eth0): " LAN_IF
+LAN_IF=${LAN_IF:-"eth0"}  # 默认值 eth0
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+# 询问局域网网段
+read -p "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
+LAN_NET=${LAN_NET:-"10.10.10.0/24"}  # 默认值 10.10.10.0/24
 
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
+# 询问主路由网关
+read -p "请输入主路由网关 (例如 10.10.10.2): " GATEWAY
+GATEWAY=${GATEWAY:-"10.10.10.2"}  # 默认值 10.10.10.2
 
-# 显示欢迎信息
-show_welcome() {
-    echo
-    log_info "=========================================="
-    log_info "   v2rayA LXC Debian 一键安装脚本"
-    log_info "=========================================="
-    echo
-}
+# 询问 sing-box 透明代理端口
+read -p "请输入 sing-box 透明代理端口 (默认 12345): " SINGBOX_TPROXY_PORT
+SINGBOX_TPROXY_PORT=${SINGBOX_TPROXY_PORT:-12345}  # 默认值 12345
 
-# 检查 root 权限
+# 询问 DNS 端口
+read -p "请输入 DNS 端口 (默认 5353): " SINGBOX_DNS_PORT
+SINGBOX_DNS_PORT=${SINGBOX_DNS_PORT:-5353}  # 默认值 5353
+
+# ====== 函数定义 ======
+log() { echo -e "[\033[1;32mINFO\033[0m] $*"; }
+warn() { echo -e "[\033[1;33mWARN\033[0m] $*"; }
+err() { echo -e "[\033[1;31mERROR\033[0m] $*"; }
+
 check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "请使用 root 权限运行此脚本"
-        exit 1
-    fi
+  if [[ $EUID -ne 0 ]]; then
+    err "请以 root 运行此脚本"
+    exit 1
+  fi
 }
 
-# 安装依赖
-install_dependencies() {
-    log_info "安装系统依赖..."
-    apt update
-    apt install -y curl wget sudo dpkg
+install_deps() {
+  log "更新 apt 并安装依赖..."
+  apt update
+  apt install -y curl wget gnupg2 ca-certificates lsb-release apt-transport-https jq iproute2 iptables iptables-persistent
 }
 
-# 安装 v2ray 核心
-install_v2ray() {
-    log_info "安装 v2ray 核心..."
-    if ! command -v v2ray &> /dev/null; then
-        bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
-        systemctl enable v2ray
-        systemctl start v2ray
-        log_info "V2Ray 安装完成"
-    else
-        log_info "v2ray 已安装，跳过..."
-    fi
+install_v2ray_core() {
+  # 安装 v2ray core（兼容性保留）
+  if ! command -v v2ray &>/dev/null; then
+    log "正在安装 v2ray core..."
+    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
+    systemctl enable v2ray || true
+    systemctl start v2ray || true
+  else
+    log "v2ray 已存在，跳过"
+  fi
 }
 
-# 安装 v2rayA (使用正确的 .deb 包地址)
 install_v2raya() {
-    log_info "安装 v2rayA..."
-    
-    # 检查是否已安装
-    if command -v v2raya &> /dev/null || dpkg -l | grep -q v2raya; then
-        log_info "v2rayA 已安装，跳过..."
-        return 0
-    fi
-    
-    cd /tmp
-    V2RAYA_VERSION="2.2.7.4"
-    
-    # 使用您提供的正确 deb 包地址
-    DEB_PACKAGE="installer_debian_x64_${V2RAYA_VERSION}.deb"
-    DOWNLOAD_URL="https://github.com/v2rayA/v2rayA/releases/download/v${V2RAYA_VERSION}/${DEB_PACKAGE}"
-    
-    log_info "下载 v2rayA .deb 包: ${DEB_PACKAGE}"
-    
-    # 检查URL是否可访问
-    log_info "检查下载链接可用性..."
-    if curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
-        log_info "下载链接有效，开始下载..."
-    else
-        log_error "下载链接无效: $DOWNLOAD_URL"
-        log_info "请检查网络连接或版本号"
-        exit 1
-    fi
-    
-    if wget --timeout=30 --tries=3 -O "$DEB_PACKAGE" "$DOWNLOAD_URL"; then
-        log_info "下载成功，开始安装..."
-        dpkg -i "$DEB_PACKAGE" || (apt install -f -y && log_info "依赖问题已解决")
-        rm -f "$DEB_PACKAGE"
-        log_info "v2rayA 安装完成"
-    else
-        log_error "v2rayA 下载失败"
-        log_info "请检查以下可能的问题："
-        log_info "1. 网络连接是否正常"
-        log_info "2. 版本号是否正确"
-        log_info "3. GitHub 访问是否顺畅"
-        log_info "手动下载地址: $DOWNLOAD_URL"
-        exit 1
-    fi
+  if dpkg -l | grep -q v2raya || command -v v2raya &>/dev/null; then
+    log "v2rayA 已安装，跳过"
+    return
+  fi
+
+  # 以 v2rayA Releases 的一个近似版本为例，脚本将尝试下载最新 release
+  V=$(curl -sSfL "https://api.github.com/repos/v2rayA/v2rayA/releases" | jq -r '.[0].tag_name' 2>/dev/null || echo "v2.2.7.4")
+  V=${V#v}
+  DEB="installer_debian_x64_${V}.deb"
+  URL="https://github.com/v2rayA/v2rayA/releases/download/v${V}/${DEB}"
+
+  log "尝试从 ${URL} 下载 v2rayA .deb（若失败请手动检查网络或版本）"
+  cd /tmp
+  if curl -L --fail -o "${DEB}" "${URL}"; then
+    dpkg -i "${DEB}" || apt -f install -y
+    rm -f "${DEB}"
+    systemctl enable v2raya || true
+    systemctl start v2raya || true
+    log "v2rayA 安装完成"
+  else
+    warn "自动下载 v2rayA 失败，请在 README 中按说明手动安装或提供可访问的 .deb 链接"
+  fi
 }
 
-# 配置系统参数
-setup_system() {
-    log_info "配置系统参数..."
-    
-    # 启用 IP 转发
-    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-        echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-    fi
-    
-    # 应用配置
-    sysctl -p
-    
-    # 创建透明代理配置脚本
-    cat > /root/setup_transparent_proxy.sh << 'EOF'
-#!/bin/bash
-set -e
+install_singbox() {
+  if command -v sing-box &>/dev/null; then
+    log "sing-box 已存在，跳过安装"
+    return
+  fi
+  log "安装 sing-box..."
 
-echo "配置透明代理规则..."
+  ARCH=$(dpkg --print-architecture)
+  case "$ARCH" in
+    amd64) ASSET="sing-box-linux-amd64" ;;
+    arm64) ASSET="sing-box-linux-arm64" ;;
+    *) ASSET="sing-box-linux-amd64" ;;
+  esac
 
-# 启用 IP 转发
-echo 1 > /proc/sys/net/ipv4/ip_forward
+  # 获取最新 release 并下载 tar.gz
+  API="https://api.github.com/repos/SagerNet/sing-box/releases"
+  TAG=$(curl -sSfL "$API" | jq -r '.[0].tag_name' 2>/dev/null || echo '')
+  if [[ -n "$TAG" ]]; then
+    URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/${ASSET}.tar.gz"
+  else
+    URL="https://github.com/SagerNet/sing-box/releases/latest/download/${ASSET}.tar.gz"
+  fi
 
-# 清理现有规则
-iptables -F
-iptables -t nat -F
-iptables -X
-iptables -t nat -X
+  cd /tmp
+  curl -L --fail -o singbox.tar.gz "$URL" || {
+    warn "无法自动下载 sing-box，可能因网络原因。请手动安装 sing-box：https://github.com/SagerNet/sing-box"
+    return
+  }
+  tar xzf singbox.tar.gz
+  install -m 0755 sing-box /usr/local/bin/sing-box
+  rm -f singbox.tar.gz sing-box
 
-# 设置默认策略
-iptables -P INPUT ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT ACCEPT
+  # 简单 systemd 单元
+  cat >/etc/systemd/system/singbox.service <<EOF
+[Unit]
+Description=sing-box
+After=network.target
 
-# 保存规则
-mkdir -p /etc/iptables
-iptables-save > /etc/iptables/rules.v4
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sing-box run -c /etc/singbox/config.json
+Restart=on-failure
 
-echo "透明代理规则配置完成"
-echo "请访问 v2rayA Web 界面完成后续配置：http://$(hostname -I | awk '{print $1}'):2017"
+[Install]
+WantedBy=multi-user.target
 EOF
 
-    chmod +x /root/setup_transparent_proxy.sh
-    log_info "系统参数配置完成"
+  systemctl daemon-reload
+  systemctl enable singbox || true
+  log "sing-box 安装完成（请编辑 /etc/singbox/config.json 放入你的出站节点配置）"
 }
 
-# 启动服务
-start_services() {
-    log_info "启动 v2rayA 服务..."
-    
-    systemctl enable v2raya
-    systemctl start v2raya
-    
-    # 检查服务状态
-    sleep 3
-    if systemctl is-active --quiet v2raya; then
-        log_info "v2rayA 服务启动成功"
-    else
-        log_warn "v2rayA 服务启动遇到问题，查看日志..."
-        sleep 2
-        journalctl -u v2raya -n 10 --no-pager
-        log_info "请检查上述日志并解决问题后，手动运行: systemctl start v2raya"
-    fi
-}
+apply_iptables() {
+  mkdir -p /opt/v2raya-singbox
+  cat >/opt/v2raya-singbox/iptables.sh <<EOF
+#!/bin/bash
+set -e
+LAN_IF="${LAN_IF}"
+LAN_NET="${LAN_NET}"
+GATEWAY="${GATEWAY}"
+TPORT=${SINGBOX_TPROXY_PORT}
+DNS_PORT=${SINGBOX_DNS_PORT}
 
-# 显示安装结果
-show_result() {
-    local ip_address=$(hostname -I | awk '{print $1}')
-    
-    echo
-    log_info "=========================================="
-    log_info "           安装完成！"
-    log_info "=========================================="
-    echo
-    log_info "🎉 v2rayA 已成功安装"
-    echo
-    log_info "📱 管理界面地址: http://${ip_address}:2017"
-    echo
-    log_info "📋 下一步操作："
-    log_info "1. 访问上述地址完成 v2rayA 初始设置"
-    log_info "2. 添加节点配置或订阅链接"
-    log_info "3. 在设置中启用透明代理"
-    log_info "4. 运行透明代理配置脚本: /root/setup_transparent_proxy.sh"
-    echo
-}
+# 清理
+iptables -t nat -F
+iptables -t mangle -F
+iptables -F
+ip rule del fwmark 1 || true
+ip route flush table 100 || true
 
-# 主函数
-main() {
-    show_welcome
-    check_root
-    install_dependencies
-    install_v2ray
-    install_v2raya
-    setup_system
-    start_services
-    show_result
-    
-    log_info "一键安装脚本执行完毕！"
-}
+# 创建一个专用路由表，走默认网关
+ip rule add fwmark 1 lookup 100
+ip route add default via ${GATEWAY} dev ${LAN_IF} table 100
 
-# 执行主函数
-main "$@"
+# DIVERT 用于处理本地创建连接
+iptables -t mangle -N DIVERT || true
+iptables -t mangle -F DIVERT
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -p udp -j MARK --set-mark 1
+
+# 标记本地进出的连接，避免循环
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -d ${GATEWAY} -j RETURN
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -d 127.0.0.1/8 -j RETURN
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -s ${LOCAL_IP} -j RETURN
+
+# 不代理局域网内地址
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -d ${LAN_NET} -j RETURN
+
+# TPROXY: 标记并交给路由表处理（udp/tcp）
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -p tcp -j TPROXY --on-port ${TPORT} --on-ip 0.0.0.0 --tproxy-mark 0x1/0x1
+iptables -t mangle -A PREROUTING -i ${LAN_IF} -p udp -j TPROXY --on-port ${TPORT} --on-ip 0.0.0.0 --tproxy-mark 0x1/0x1
+
+# 将本机经过的 DNS (53) 转到本地的 5353
+iptables -t nat -A PREROUTING -i ${LAN_IF} -p udp --dport 53 -j REDIRECT --to-ports ${DNS_PORT}
+iptables -t nat -A PREROUTING -i ${LAN_IF} -p tcp --dport 53 -j REDIRECT --to-ports ${DNS_PORT}
+
+# NAT 出口
+iptables -t nat -A POSTROUTING -o ${LAN_IF} -j MASQUERADE
+
