@@ -28,6 +28,18 @@ check_root() {
   fi
 }
 
+check_network_mode() {
+  NETWORK_MODE=$(cat /etc/network/interfaces | grep -i "iface" | awk '{print $2}')
+  if [[ "$NETWORK_MODE" == "vmbr0" ]]; then
+    log "网络配置为桥接模式，继续安装..."
+  else
+    log "[WARN] 你的容器网络配置为 NAT 模式！为了能够访问容器内服务，请确保容器使用桥接模式（vmbr0）"
+    echo "你可以在 PVE GUI 中设置容器的网络模式为桥接（vmbr0）来允许外部访问"
+    echo "如果你坚持使用 NAT 模式，请参考 PVE 文档设置端口映射"
+    exit 1
+  fi
+}
+
 install_deps() {
   log "安装依赖..."
   apt update
@@ -129,6 +141,7 @@ EOF
 
 main() {
   check_root
+  check_network_mode
   install_deps
   install_v2ray_core
   install_v2raya
