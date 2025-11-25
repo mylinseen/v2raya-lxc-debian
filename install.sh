@@ -154,7 +154,13 @@ systemctl enable tproxy
 systemctl start tproxy
 
 # ================================
-# DNS 设置
+# 确保 dnsmasq 目录存在
+# ================================
+green "确保 dnsmasq 配置目录存在..."
+mkdir -p /etc/dnsmasq.d
+
+# ================================
+# DNS 配置
 # ================================
 green "配置 DNS 重定向..."
 
