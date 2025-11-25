@@ -4,8 +4,12 @@
 
 项目地址：
 **[https://github.com/mylinseen/v2raya-lxc-debian](https://github.com/mylinseen/v2raya-lxc-debian)**
-
 ---
+
+## 🚀 已知小bug（安装好以后输入以下命令，重启LXC）
+```
+sudo systemctl enable v2raya
+```
 
 ## 🚀 一键安装（推荐）
 
