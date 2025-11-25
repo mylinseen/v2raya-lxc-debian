@@ -28,12 +28,6 @@ show_welcome() {
     log_info "   v2rayA LXC Debian 一键安装脚本"
     log_info "=========================================="
     echo
-    log_info "此脚本将安装以下组件："
-    log_info "  • V2Ray 核心"
-    log_info "  • v2rayA 管理界面 (v2.2.7.4)"
-    log_info "  • 透明代理支持"
-    log_info "  • 系统服务配置"
-    echo
 }
 
 # 检查 root 权限
@@ -55,7 +49,6 @@ install_dependencies() {
 install_v2ray() {
     log_info "安装 v2ray 核心..."
     if ! command -v v2ray &> /dev/null; then
-        # 使用官方脚本安装 V2Ray [citation:1]
         bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
         systemctl enable v2ray
         systemctl start v2ray
@@ -65,33 +58,47 @@ install_v2ray() {
     fi
 }
 
-# 安装 v2rayA (使用 .deb 包)
+# 安装 v2rayA (使用正确的 .deb 包地址)
 install_v2raya() {
     log_info "安装 v2rayA..."
     
     # 检查是否已安装
-    if dpkg -l | grep -q v2raya; then
+    if command -v v2raya &> /dev/null || dpkg -l | grep -q v2raya; then
         log_info "v2rayA 已安装，跳过..."
         return 0
     fi
     
-    # 下载并安装 .deb 包
     cd /tmp
     V2RAYA_VERSION="2.2.7.4"
-    DEB_PACKAGE="v2raya_${V2RAYA_VERSION}_amd64.deb"
-    DEB_URL="https://github.com/v2rayA/v2rayA/releases/download/v${V2RAYA_VERSION}/${DEB_PACKAGE}"
     
-    log_info "下载 v2rayA .deb 包: ${V2RAYA_VERSION}"
+    # 使用您提供的正确 deb 包地址
+    DEB_PACKAGE="installer_debian_x64_${V2RAYA_VERSION}.deb"
+    DOWNLOAD_URL="https://github.com/v2rayA/v2rayA/releases/download/v${V2RAYA_VERSION}/${DEB_PACKAGE}"
     
-    if wget --timeout=30 --tries=3 -O "$DEB_PACKAGE" "$DEB_URL"; then
+    log_info "下载 v2rayA .deb 包: ${DEB_PACKAGE}"
+    
+    # 检查URL是否可访问
+    log_info "检查下载链接可用性..."
+    if curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
+        log_info "下载链接有效，开始下载..."
+    else
+        log_error "下载链接无效: $DOWNLOAD_URL"
+        log_info "请检查网络连接或版本号"
+        exit 1
+    fi
+    
+    if wget --timeout=30 --tries=3 -O "$DEB_PACKAGE" "$DOWNLOAD_URL"; then
         log_info "下载成功，开始安装..."
-        apt install -y "./$DEB_PACKAGE"
+        dpkg -i "$DEB_PACKAGE" || (apt install -f -y && log_info "依赖问题已解决")
         rm -f "$DEB_PACKAGE"
         log_info "v2rayA 安装完成"
     else
         log_error "v2rayA 下载失败"
-        log_info "请手动下载 .deb 包: $DEB_URL"
-        log_info "然后运行: sudo dpkg -i /path/to/$DEB_PACKAGE"
+        log_info "请检查以下可能的问题："
+        log_info "1. 网络连接是否正常"
+        log_info "2. 版本号是否正确"
+        log_info "3. GitHub 访问是否顺畅"
+        log_info "手动下载地址: $DOWNLOAD_URL"
         exit 1
     fi
 }
@@ -100,7 +107,7 @@ install_v2raya() {
 setup_system() {
     log_info "配置系统参数..."
     
-    # 启用 IP 转发 (对旁路由很关键) [citation:2]
+    # 启用 IP 转发
     if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
         echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
     fi
@@ -108,7 +115,7 @@ setup_system() {
     # 应用配置
     sysctl -p
     
-    # 创建透明代理配置脚本 [citation:2]
+    # 创建透明代理配置脚本
     cat > /root/setup_transparent_proxy.sh << 'EOF'
 #!/bin/bash
 set -e
@@ -144,16 +151,19 @@ EOF
 # 启动服务
 start_services() {
     log_info "启动 v2rayA 服务..."
+    
     systemctl enable v2raya
     systemctl start v2raya
     
     # 检查服务状态
-    sleep 2
+    sleep 3
     if systemctl is-active --quiet v2raya; then
         log_info "v2rayA 服务启动成功"
     else
-        log_error "v2rayA 服务启动失败，查看日志..."
+        log_warn "v2rayA 服务启动遇到问题，查看日志..."
+        sleep 2
         journalctl -u v2raya -n 10 --no-pager
+        log_info "请检查上述日志并解决问题后，手动运行: systemctl start v2raya"
     fi
 }
 
@@ -189,7 +199,7 @@ main() {
     start_services
     show_result
     
-    log_info "安装脚本执行完毕！"
+    log_info "一键安装脚本执行完毕！"
 }
 
 # 执行主函数
