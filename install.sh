@@ -7,11 +7,11 @@ echo "请提供以下配置选项："
 read -p "请输入外网接口名称 (例如 eth0): " LAN_IF
 LAN_IF=${LAN_IF:-"eth0"}
 
-read -p "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
-LAN_NET=${LAN_NET:-"10.10.10.0/24"}
+read -p "请输入局域网网段 (例如 192.168.1.0/24): " LAN_NET
+LAN_NET=${LAN_NET:-"192.168.1.0/24"}
 
-read -p "请输入主路由网关 (例如 10.10.10.2): " GATEWAY
-GATEWAY=${GATEWAY:-"10.10.10.2"}
+read -p "请输入主路由网关 (例如 192.168.1.1): " GATEWAY
+GATEWAY=${GATEWAY:-"192.168.1.1"}
 
 read -p "请输入 sing-box 透明代理端口 (默认 12345): " SINGBOX_TPROXY_PORT
 SINGBOX_TPROXY_PORT=${SINGBOX_TPROXY_PORT:-12345}
