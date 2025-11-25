@@ -4,18 +4,23 @@ set -euo pipefail
 # ====== 提示用户输入配置 ======
 echo "请提供以下配置选项："
 
+# 外网接口名称，默认 eth0
 read -p "请输入外网接口名称 (例如 eth0): " LAN_IF
 LAN_IF=${LAN_IF:-"eth0"}
 
-read -p "请输入局域网网段 (例如 192.168.1.0/24): " LAN_NET
-LAN_NET=${LAN_NET:-"192.168.1.0/24"}
+# 局域网网段，默认 10.10.10.0/24
+read -p "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
+LAN_NET=${LAN_NET:-"10.10.10.0/24"}
 
-read -p "请输入主路由网关 (例如 192.168.1.1): " GATEWAY
-GATEWAY=${GATEWAY:-"192.168.1.1"}
+# 主路由网关，默认 10.10.10.2
+read -p "请输入主路由网关 (例如 10.10.10.2): " GATEWAY
+GATEWAY=${GATEWAY:-"10.10.10.2"}
 
+# sing-box 透明代理端口，默认 12345
 read -p "请输入 sing-box 透明代理端口 (默认 12345): " SINGBOX_TPROXY_PORT
 SINGBOX_TPROXY_PORT=${SINGBOX_TPROXY_PORT:-12345}
 
+# DNS 端口，默认 5353
 read -p "请输入 DNS 端口 (默认 5353): " SINGBOX_DNS_PORT
 SINGBOX_DNS_PORT=${SINGBOX_DNS_PORT:-5353}
 
@@ -139,6 +144,21 @@ EOF
   chmod +x /opt/v2raya-singbox/iptables.sh
 }
 
+enable_v2raya() {
+  # 确保 v2raya 服务启动并设置为自动启动
+  log "启用 v2raya 服务..."
+  systemctl enable v2raya
+}
+
+check_ip_forward() {
+  # 确保 IP 转发已启用
+  if ! sysctl net.ipv4.ip_forward | grep -q "net.ipv4.ip_forward = 1"; then
+    log "启用 IP 转发..."
+    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    sysctl -p
+  fi
+}
+
 main() {
   check_root
   check_network_mode
@@ -147,6 +167,8 @@ main() {
   install_v2raya
   install_singbox
   apply_iptables
+  enable_v2raya
+  check_ip_forward
 
   log "安装完成！请手动执行:"
   echo "  bash /opt/v2raya-singbox/iptables.sh"
