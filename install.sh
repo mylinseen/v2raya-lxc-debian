@@ -1,164 +1,162 @@
 #!/bin/bash
-set -euo pipefail
-
-# ====== 提示用户输入配置 ======
-echo "请提供以下配置选项："
-
-# 外网接口名称，默认 eth0
-read -p "请输入外网接口名称 (例如 eth0): " LAN_IF
-LAN_IF=${LAN_IF:-"eth0"}
-
-# 局域网网段，默认 10.10.10.0/24
-read -p "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
-LAN_NET=${LAN_NET:-"10.10.10.0/24"}
-
-# 主路由网关，默认 10.10.10.2
-read -p "请输入主路由网关 (例如 10.10.10.2): " GATEWAY
-GATEWAY=${GATEWAY:-"10.10.10.2"}
-
-# sing-box 透明代理端口，默认 12345
-read -p "请输入 sing-box 透明代理端口 (默认 12345): " SINGBOX_TPROXY_PORT
-SINGBOX_TPROXY_PORT=${SINGBOX_TPROXY_PORT:-12345}
-
-# DNS 端口，默认 5353
-read -p "请输入 DNS 端口 (默认 5353): " SINGBOX_DNS_PORT
-SINGBOX_DNS_PORT=${SINGBOX_DNS_PORT:-5353}
-
-log() { echo -e "[\033[1;32mINFO\033[0m] $*" }
-
-check_root() {
-  if [[ $EUID -ne 0 ]]; then
-    echo "[ERROR] 请以 root 运行此脚本"
-    exit 1
-  fi
-}
-
-install_deps() {
-  log "安装依赖..."
-  apt update
-  apt install -y curl wget jq iproute2 iptables iptables-persistent gnupg2
-}
-
-install_v2ray_core() {
-  if ! command -v v2ray &>/dev/null; then
-    log "安装 v2ray core..."
-    bash <(curl -L https://raw.githubusercontent.com/v2fly/fhs-install-v2ray/master/install-release.sh)
-  else
-    log "v2ray 已存在，跳过"
-  fi
-}
-
-install_v2raya() {
-  if dpkg -l | grep -q v2raya; then
-    log "v2rayA 已安装，跳过"
-    return
-  fi
-
-  V=$(curl -sSfL "https://api.github.com/repos/v2rayA/v2rayA/releases" | jq -r '.[0].tag_name')
-  V=${V#v}
-  DEB="installer_debian_x64_${V}.deb"
-  URL="https://github.com/v2rayA/v2rayA/releases/download/v${V}/${DEB}"
-
-  log "下载 v2rayA: ${URL}"
-
-  cd /tmp
-  curl -L --fail -o "${DEB}" "${URL}"
-  dpkg -i "${DEB}" || apt -f install -y
-  rm -f "${DEB}"
-}
-
-install_singbox() {
-  if command -v sing-box &>/dev/null; then
-    log "sing-box 已存在"
-    return
-  fi
-
-  ARCH="sing-box-linux-amd64"
-
-  TAG=$(curl -sSfL https://api.github.com/repos/SagerNet/sing-box/releases | jq -r '.[0].tag_name')
-  URL="https://github.com/SagerNet/sing-box/releases/download/${TAG}/${ARCH}.tar.gz"
-
-  cd /tmp
-  curl -L -o sb.tar.gz "$URL"
-  tar xzf sb.tar.gz
-  install -m 0755 sing-box /usr/local/bin/sing-box
-}
-
-apply_iptables() {
-  LOCAL_IP=$(hostname -I | awk '{print $1}')
-
-  mkdir -p /opt/v2raya-singbox
-  cat >/opt/v2raya-singbox/iptables.sh <<EOF
-#!/bin/bash
 set -e
 
-LAN_IF="${LAN_IF}"
-LAN_NET="${LAN_NET}"
-GATEWAY="${GATEWAY}"
-LOCAL_IP="${LOCAL_IP}"
-TPORT=${SINGBOX_TPROXY_PORT}
-DNS_PORT=${SINGBOX_DNS_PORT}
+green(){ echo -e "\e[32m$1\e[0m"; }
+red(){ echo -e "\e[31m$1\e[0m"; }
 
-iptables -t nat -F
-iptables -t mangle -F
-iptables -F
+# ============ 检查网络 =============
+check_network_mode() {
+    if ip link show eth0 >/dev/null 2>&1; then
+        green "检测到 eth0，继续安装..."
+    else
+        red "未找到 eth0，请检查你的 LXC 网络设置！"
+    fi
+}
+check_network_mode
 
-ip rule del fwmark 1 2>/dev/null || true
-ip route flush table 100 2>/dev/null || true
+# ============ 用户输入 =============
+read -rp "请输入外网接口名称 (例如 eth0): " WAN_IF
+read -rp "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
+read -rp "请输入主路由网关 (例如 10.10.10.2): " LAN_GW
+read -rp "请输入 sing-box 透明代理端口 (默认 12345): " SB_PORT
+read -rp "请输入 DNS 端口 (默认 5353): " DNS_PORT
 
-ip rule add fwmark 1 lookup 100
-ip route add default via ${GATEWAY} dev ${LAN_IF} table 100
+SB_PORT=${SB_PORT:-12345}
+DNS_PORT=${DNS_PORT:-5353}
 
-iptables -t mangle -N DIVERT 2>/dev/null || true
-iptables -t mangle -F DIVERT
+green "
+=== 配置确认 ===
+外网接口：$WAN_IF
+局域网：$LAN_NET
+主路由网关：$LAN_GW
+透明代理端口：$SB_PORT
+DNS 端口：$DNS_PORT
+================
+"
 
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -p udp -j MARK --set-mark 1
+sleep 1
 
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -d ${GATEWAY} -j RETURN
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -d 127.0.0.1/8 -j RETURN
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -s ${LOCAL_IP} -j RETURN
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -d ${LAN_NET} -j RETURN
+# ============ 基础依赖 =============
+apt update
+apt install -y curl wget sudo iptables iproute2 ca-certificates nano
 
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -p tcp -j TPROXY --on-port ${TPORT} --on-ip 0.0.0.0 --tproxy-mark 0x1/0x1
-iptables -t mangle -A PREROUTING -i ${LAN_IF} -p udp -j TPROXY --on-port ${TPORT} --on-ip 0.0.0.0 --tproxy-mark 0x1/0x1
+# ============ 安装 V2RayA =============
+green "安装 V2RayA..."
 
-iptables -t nat -A PREROUTING -i ${LAN_IF} -p udp --dport 53 -j REDIRECT --to-ports ${DNS_PORT}
-iptables -t nat -A PREROUTING -i ${LAN_IF} -p tcp --dport 53 -j REDIRECT --to-ports ${DNS_PORT}
+bash <(curl -Ls https://mirrors.v2raya.org/go.sh)
 
-iptables -t nat -A POSTROUTING -o ${LAN_IF} -j MASQUERADE
+# 修复 systemd 服务
+cat > /etc/systemd/system/v2raya.service <<EOF
+[Unit]
+Description=V2RayA Panel
+After=network.target
+
+[Service]
+User=root
+ExecStart=/usr/local/bin/v2raya
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-  chmod +x /opt/v2raya-singbox/iptables.sh
+systemctl daemon-reload
+systemctl enable v2raya
+systemctl restart v2raya
+
+green "V2RayA 安装完成，访问端口：2017"
+
+# ============ 安装 sing-box =============
+green "安装 sing-box..."
+
+bash <(curl -fsSL https://sing-box.app/install.sh)
+
+mkdir -p /etc/sing-box
+
+# 生成完整透明代理配置（留空，交给 V2RayA 管理）
+cat > /etc/sing-box/config.json <<EOF
+{
+  "inbounds": [
+    {
+      "type": "tproxy",
+      "listen": "::",
+      "listen_port": $SB_PORT,
+      "network": "tcp,udp"
+    }
+  ],
+  "outbounds": [
+    { "type": "direct" }
+  ]
 }
+EOF
 
-enable_v2raya() {
-  # 确保 v2raya 服务启动并设置为自动启动
-  log "启用 v2raya 服务..."
-  systemctl enable v2raya
-}
+systemctl enable sing-box
+systemctl restart sing-box
 
-check_ip_forward() {
-  # 确保 IP 转发已启用
-  if ! sysctl net.ipv4.ip_forward | grep -q "net.ipv4.ip_forward = 1"; then
-    log "启用 IP 转发..."
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-    sysctl -p
-  fi
-}
+# ============ TPROXY 规则 =============
+green "写入 TProxy 防火墙规则..."
 
-main() {
-  check_root
-  install_deps
-  install_v2ray_core
-  install_v2raya
-  install_singbox
-  apply_iptables
-  enable_v2raya
-  check_ip_forward
+cat > /etc/iptables-tproxy.sh <<EOF
+#!/bin/bash
 
-  log "安装完成！请手动执行:"
-  echo "  bash /opt/v2raya-singbox/iptables.sh"
-  echo "访问 v2rayA: http://${LOCAL_IP}:2017"
-}
+# 清理旧规则
+iptables -t mangle -F
+iptables -t mangle -X V2RAY 2>/dev/null || true
+iptables -t mangle -N V2RAY
 
-main
+# 对局域网入站流量进行 TPROXY
+iptables -t mangle -A PREROUTING -s $LAN_NET -j V2RAY
+iptables -t mangle -A V2RAY -p tcp -j TPROXY --on-port $SB_PORT --tproxy-mark 1
+iptables -t mangle -A V2RAY -p udp -j TPROXY --on-port $SB_PORT --tproxy-mark 1
+
+# 路由表
+ip rule add fwmark 1 lookup 100 || true
+ip route add local 0.0.0.0/0 dev lo table 100 || true
+EOF
+
+chmod +x /etc/iptables-tproxy.sh
+bash /etc/iptables-tproxy.sh
+
+# systemd 服务
+cat > /etc/systemd/system/tproxy.service <<EOF
+[Unit]
+Description=TPROXY Firewall Rules
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/iptables-tproxy.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable tproxy
+systemctl start tproxy
+
+# ============ 设置 DNS 服务器 =============
+green "配置 DNS 重定向..."
+
+cat > /etc/dnsmasq.d/custom-dns.conf <<EOF
+port=$DNS_PORT
+server=8.8.8.8
+server=223.5.5.5
+cache-size=1000
+EOF
+
+apt install -y dnsmasq
+systemctl enable dnsmasq
+systemctl restart dnsmasq
+
+green "===================================="
+green " 透明代理 + V2RayA + sing-box 已完成！"
+green "===================================="
+
+echo "
+下一步：
+1️⃣ 浏览器打开 V2RayA 面板： http://你的IP:2017  
+2️⃣ 在 V2RayA 选择“透明代理模式（TProxy）”
+3️⃣ 设置好节点即可工作
+"
