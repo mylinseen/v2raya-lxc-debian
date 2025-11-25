@@ -1,26 +1,35 @@
 #!/bin/bash
 set -e
 
+# ================================
+# 颜色定义
+# ================================
 green(){ echo -e "\e[32m$1\e[0m"; }
 red(){ echo -e "\e[31m$1\e[0m"; }
 
-# ============ 检查网络 =============
+# ================================
+# 检查容器网络配置
+# ================================
 check_network_mode() {
     if ip link show eth0 >/dev/null 2>&1; then
         green "检测到 eth0，继续安装..."
     else
         red "未找到 eth0，请检查你的 LXC 网络设置！"
+        exit 1
     fi
 }
 check_network_mode
 
-# ============ 用户输入 =============
+# ================================
+# 用户输入
+# ================================
 read -rp "请输入外网接口名称 (例如 eth0): " WAN_IF
 read -rp "请输入局域网网段 (例如 10.10.10.0/24): " LAN_NET
 read -rp "请输入主路由网关 (例如 10.10.10.2): " LAN_GW
 read -rp "请输入 sing-box 透明代理端口 (默认 12345): " SB_PORT
 read -rp "请输入 DNS 端口 (默认 5353): " DNS_PORT
 
+# 设置默认值
 SB_PORT=${SB_PORT:-12345}
 DNS_PORT=${DNS_PORT:-5353}
 
@@ -36,11 +45,15 @@ DNS 端口：$DNS_PORT
 
 sleep 1
 
-# ============ 基础依赖 =============
+# ================================
+# 安装依赖
+# ================================
 apt update
 apt install -y curl wget sudo iptables iproute2 ca-certificates nano
 
-# ============ 安装 V2RayA =============
+# ================================
+# 安装 V2RayA
+# ================================
 green "安装 V2RayA..."
 
 bash <(curl -Ls https://mirrors.v2raya.org/go.sh)
@@ -66,14 +79,16 @@ systemctl restart v2raya
 
 green "V2RayA 安装完成，访问端口：2017"
 
-# ============ 安装 sing-box =============
+# ================================
+# 安装 sing-box
+# ================================
 green "安装 sing-box..."
 
 bash <(curl -fsSL https://sing-box.app/install.sh)
 
 mkdir -p /etc/sing-box
 
-# 生成完整透明代理配置（留空，交给 V2RayA 管理）
+# 生成透明代理配置
 cat > /etc/sing-box/config.json <<EOF
 {
   "inbounds": [
@@ -93,8 +108,10 @@ EOF
 systemctl enable sing-box
 systemctl restart sing-box
 
-# ============ TPROXY 规则 =============
-green "写入 TProxy 防火墙规则..."
+# ================================
+# TPROXY 防火墙规则配置
+# ================================
+green "设置 TPROXY 防火墙规则..."
 
 cat > /etc/iptables-tproxy.sh <<EOF
 #!/bin/bash
@@ -136,7 +153,9 @@ systemctl daemon-reload
 systemctl enable tproxy
 systemctl start tproxy
 
-# ============ 设置 DNS 服务器 =============
+# ================================
+# DNS 设置
+# ================================
 green "配置 DNS 重定向..."
 
 cat > /etc/dnsmasq.d/custom-dns.conf <<EOF
@@ -151,7 +170,7 @@ systemctl enable dnsmasq
 systemctl restart dnsmasq
 
 green "===================================="
-green " 透明代理 + V2RayA + sing-box 已完成！"
+green "透明代理 + V2RayA + sing-box 安装完成！"
 green "===================================="
 
 echo "
